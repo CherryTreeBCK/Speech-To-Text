@@ -4,63 +4,53 @@ import sys
 from threading import Thread
 from google.cloud import speech
 import pyaudio
-import sounddevice as sd
 
 # Audio recording parameters
 RATE = 16000
 CHUNK = int(RATE / 10)  # 100ms
 
-
 class MicrophoneStream:
-    """Opens a loopback recording stream as a generator yielding the audio chunks."""
-    def __init__(self, rate=RATE, chunk=CHUNK, device=4):  # Adjust the device index as needed
+    """Opens a recording stream as a generator yielding the audio chunks."""
+    def __init__(self, rate, chunk):
         self._rate = rate
         self._chunk = chunk
-        self._device = device
         self._buff = queue.Queue()
         self.closed = True
 
     def __enter__(self):
-        # Define the callback function for the SoundDevice stream
-        def callback(indata, frames, time, status):
-            # Convert the numpy array (indata) to bytes and put it in the buffer
-            self._buff.put(indata.tobytes())
-
-        # Open the SoundDevice stream for loopback
-        self._audio_stream = sd.InputStream(
-            device=8, 
-            channels=1, 
-            samplerate=self._rate,
-            callback=callback
+        self._audio_interface = pyaudio.PyAudio()
+        self._audio_stream = self._audio_interface.open(
+            format=pyaudio.paInt16,
+            channels=1,
+            rate=self._rate,
+            input=True,
+            frames_per_buffer=self._chunk,
+            # Stream callback for asynchronous audio processing
+            stream_callback=self._fill_buffer,
+            input_device_index=2,
         )
-        self._audio_stream.start()
         self.closed = False
         return self
 
     def __exit__(self, type, value, traceback):
-        self._audio_stream.stop()
+        self._audio_stream.stop_stream()
         self._audio_stream.close()
         self.closed = True
         self._buff.put(None)
+        self._audio_interface.terminate()
+
+    def _fill_buffer(self, in_data, frame_count, time_info, status_flags):
+        """Continuously collect data from the audio stream into the buffer."""
+        self._buff.put(in_data)
+        return None, pyaudio.paContinue
 
     def generator(self):
-        """Generates audio chunks from the stream."""
+        """Generates audio chunks from the buffer."""
         while not self.closed:
             chunk = self._buff.get()
             if chunk is None:
                 return
-            data = [chunk]
-
-            while True:
-                try:
-                    chunk = self._buff.get(block=False)
-                    if chunk is None:
-                        return
-                    data.append(chunk)
-                except queue.Empty:
-                    break
-
-            yield b"".join(data)
+            yield chunk
 
 def listen_print_loop(responses):
     """Iterates through server responses and prints the transcription."""

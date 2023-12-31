@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import colorchooser, simpledialog, font
 from tkinter.ttk import Combobox
+import queue
 
 class GUI:
     def __init__(self):
@@ -11,20 +12,18 @@ class GUI:
         self.root.overrideredirect(True)
         self.root.attributes('-alpha', 0.7)
         self.overrideredirect_enabled = True
-        
+
         self.default_font = ("Helvetica", 18)
         self.default_font_color = "black"
-        self.text_label = tk.Label(self.root, 
-                                   text="Your text will appear here", 
-                                   fg = self.default_font_color,
-                                   bg ="white")
+        self.text_label = tk.Label(self.root, text="Your text will appear here",
+                                   fg=self.default_font_color, bg="white")
         self.text_label.pack(expand=True, fill="both")
         self.text_label.configure(font=self.default_font)
 
         # Settings icon
-        self.settings_icon = tk.Label(self.root, text="⚙", 
-                                      font=self.default_font, 
-                                      fg=self.default_font_color, 
+        self.settings_icon = tk.Label(self.root, text="⚙",
+                                      font=self.default_font,
+                                      fg=self.default_font_color,
                                       cursor="hand2")
         self.settings_icon.pack(anchor="ne")
         self.settings_icon.bind("<Button-1>", self.open_settings)
@@ -48,6 +47,12 @@ class GUI:
         self.settings_menu.add_command(label="Change Font Size", command=self.change_font_size)
         self.settings_menu.add_command(label="Change Font Color", command=self.change_font_color)
         self.settings_menu.add_command(label="Exit", command=self.exit_app)
+
+        # Queue for thread communication
+        self.queue = queue.Queue()
+
+        # Update GUI periodically from the queue
+        self.update_gui()
 
     def open_settings(self, event):
         self.settings_menu.tk_popup(event.x_root, event.y_root)
@@ -116,13 +121,20 @@ class GUI:
             self.root.geometry(f"+{x}+{y}")
 
     def exit_app(self):
-        self.root.destroy() # Destroy the root window   
-        
+        self.root.destroy()
+
+    def update_text(self, text):
+        self.text_label.config(text=text)
+
+    def update_gui(self):
+        while not self.queue.empty():
+            text = self.queue.get_nowait()
+            self.update_text(text)
+        self.root.after(100, self.update_gui)
+
     def run(self):
-        self.root.mainloop() # Run the main loop 
-        
+        self.root.mainloop()
 
 if __name__ == "__main__":
     gui = GUI()
     gui.run()
-
