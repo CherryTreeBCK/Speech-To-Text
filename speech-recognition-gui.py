@@ -26,7 +26,7 @@ class MicrophoneStream:
             input=True,
             frames_per_buffer=self._chunk,
             stream_callback=self._fill_buffer,
-            input_device_index=2,
+            input_device_index=1,
         )
         self.closed = False
         return self

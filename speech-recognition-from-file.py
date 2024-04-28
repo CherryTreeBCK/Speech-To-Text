@@ -1,4 +1,3 @@
-import argparse
 from _spinner_helper import Spinner
 import pyaudiowpatch as pyaudio
 import time
@@ -9,8 +8,10 @@ DURATION = 5.0
 CHUNK_SIZE = 512
 CURRENT_FILENAME = "recording_{}.wav"
 CURRENT_INDEX = 1
+chunks = []
 
 from google.cloud import speech
+from pydub import AudioSegment
 
 def transcribe_file(speech_file: str) -> speech.RecognizeResponse:
     """Transcribe the given audio file."""
@@ -104,17 +105,20 @@ def record_audio():
         wave_file.close()
         
         return filename
+    
+# Load the audio file
+
+# Export each chunk as a separate WAV file
+for i, chunk in enumerate(chunks):
+    chunk.export(f"chunk_{i}.wav", format="wav")
 
 # Record audio and transcribe in order
 filenames = []
-for _ in range(3):  # Record 3 times
+for _ in range(5):  # Record 3 times
     filename = record_audio()
+    song = AudioSegment.from_file(filename, format="wav")
     filenames.append(filename)
-
-# Transcribe recorded audio files
-for filename in filenames:
     transcribe_file(filename)
 
-# Delete all audio files
 for filename in filenames:
     os.remove(filename)
