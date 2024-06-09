@@ -15,17 +15,28 @@ class GUI:
 
         self.default_font = ("Helvetica", 18)
         self.default_font_color = "black"
+
+        # Create a transparent window
+        self.root.wm_attributes('-transparentcolor', self.root['bg'])
+
+        # Canvas for rounded edges
+        self.canvas = tk.Canvas(self.root, width=400, height=100, bg=self.root['bg'], highlightthickness=0)
+        self.canvas.pack(expand=True, fill="both")
+        self.rounded_rect = self.create_rounded_rectangle(0, 0, 400, 100, 20, fill="white", outline="")
+
+        # Text label
         self.text_label = tk.Label(self.root, text="Your text will appear here",
-                                   fg=self.default_font_color, bg="white")
-        self.text_label.pack(expand=True, fill="both")
+                                   fg=self.default_font_color, bg="white", anchor="e")
+        self.text_label.place(relx=1, rely=0.5, anchor="e")
         self.text_label.configure(font=self.default_font)
 
         # Settings icon
         self.settings_icon = tk.Label(self.root, text="⚙",
                                       font=self.default_font,
                                       fg=self.default_font_color,
-                                      cursor="hand2")
-        self.settings_icon.pack(anchor="ne")
+                                      cursor="hand2",
+                                      bg="white")
+        self.settings_icon.place(relx=0.97, rely=0.0, anchor="ne")
         self.settings_icon.bind("<Button-1>", self.open_settings)
 
         # Initialize variables for dragging
@@ -54,6 +65,29 @@ class GUI:
         # Update GUI periodically from the queue
         self.update_gui()
 
+    def create_rounded_rectangle(self, x1, y1, x2, y2, radius=25, **kwargs):
+        points = [x1 + radius, y1,
+                  x1 + radius, y1,
+                  x2 - radius, y1,
+                  x2 - radius, y1,
+                  x2, y1,
+                  x2, y1 + radius,
+                  x2, y1 + radius,
+                  x2, y2 - radius,
+                  x2, y2 - radius,
+                  x2, y2,
+                  x2 - radius, y2,
+                  x2 - radius, y2,
+                  x1 + radius, y2,
+                  x1 + radius, y2,
+                  x1, y2,
+                  x1, y2 - radius,
+                  x1, y2 - radius,
+                  x1, y1 + radius,
+                  x1, y1 + radius,
+                  x1, y1]
+        return self.canvas.create_polygon(points, **kwargs, smooth=True)
+
     def open_settings(self, event):
         self.settings_menu.tk_popup(event.x_root, event.y_root)
 
@@ -67,8 +101,9 @@ class GUI:
     def change_color(self):
         color = colorchooser.askcolor(title="Choose background color")[1]
         if color:
-            self.root.config(bg=color)
+            self.canvas.itemconfig(self.rounded_rect, fill=color)
             self.text_label.config(bg=color)
+            self.settings_icon.config(bg=color)
 
     def change_translucency(self):
         alpha = simpledialog.askfloat("Translucency", "Enter value (0.1 - 1.0):", minvalue=0.1, maxvalue=1.0)
@@ -101,7 +136,7 @@ class GUI:
             self.default_font = (self.default_font[0], font_size)
             self.text_label.configure(font=self.default_font, fg=self.default_font_color)
             self.settings_icon.configure(font=self.default_font, fg=self.default_font_color)
-            
+
     def change_font_color(self):
         color = colorchooser.askcolor(title="Choose font color")[1]
         if color:
