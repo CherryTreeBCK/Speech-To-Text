@@ -1,105 +1,170 @@
-import argparse                          # Module to handle command-line arguments
-from _spinner_helper import Spinner      # Custom module for creating a spinner effect
-import pyaudiowpatch as pyaudio          # Modified PyAudio for specific audio handling
-import time                              # Time library for timing operations
-import wave                              # Module to read and write WAV files
-import os                                # Operating system interface module
-
-# Constants for audio recording
-DURATION = 5.0                           # Duration of each audio recording in seconds
-CHUNK_SIZE = 512                         # Size of each audio chunk to read
-CURRENT_FILENAME = "recording_{}.wav"    # Template for audio file naming
-CURRENT_INDEX = 1                        # Index to keep track of audio files created
-
-# Import Google Cloud client library for speech recognition
+# Speech Recognition
+import queue
+import re
+from threading import Thread
 from google.cloud import speech
+import pyaudiowpatch as pyaudio
 
-def transcribe_file(speech_file: str) -> speech.RecognizeResponse:
-    """Transcribe the given audio file using Google Cloud Speech-to-Text API."""
-    client = speech.SpeechClient()        # Create a client for interacting with the API
+# Audio recording parameters
+CHUNK_SIZE = 512
+RATE = 48000
 
-    with open(speech_file, "rb") as audio_file:
-        content = audio_file.read()       # Read the audio file content
+class ComputerAudioStream:
+    """Opens a recording stream as a generator yielding the audio chunks."""
+    def __init__(self, rate, chunk):
+        self._rate = rate
+        self._chunk = chunk
+        self._buff = queue.Queue()
+        self.closed = True
 
-    audio = speech.RecognitionAudio(content=content)
-    config = speech.RecognitionConfig(
-        encoding='LINEAR16',                  # Audio encoding type
-        language_code='en-US',                # Language of the audio
-        sample_rate_hertz=48000,              # Sample rate in Hertz
-        audio_channel_count=2,                # Number of audio channels
-    )
-
-    response = client.recognize(config=config, audio=audio)
-
-    # Print the transcripts for the entire audio file
-    for result in response.results:
-        print(f"Transcript: {result.alternatives[0].transcript}")
-
-    return response
-
-def record_audio():
-    """Record audio from the system's default microphone for a set duration."""
-    global CURRENT_FILENAME, CURRENT_INDEX
-    filename = CURRENT_FILENAME.format(CURRENT_INDEX)
-    CURRENT_INDEX += 1
-
-    with pyaudio.PyAudio() as p, Spinner() as spinner:
+    def __enter__(self):
+        self._audio_interface = pyaudio.PyAudio()
         try:
-            # Get default WASAPI host API information
-            wasapi_info = p.get_host_api_info_by_type(pyaudio.paWASAPI)
+            # Attempt to get default WASAPI host API information
+            self.wasapi_info = self._audio_interface.get_host_api_info_by_type(pyaudio.paWASAPI)
+            
         except OSError:
-            spinner.print("WASAPI not available. Exiting...")
-            spinner.stop()
+            print("WASAPI not available. Exiting...")
             exit()
-
-        # Get default WASAPI speakers
-        default_speakers = p.get_device_info_by_index(wasapi_info["defaultOutputDevice"])
         
+        # Find default output device that supports loopback recording
+        default_speakers = self.get_default_speakers()
+        # Get the audio stream of the default speakers
+        self._audio_stream = self.get_audio_stream(default_speakers)
+        self.closed = False
+        return self
+
+    def __exit__(self, type, value, traceback):
+        self._audio_stream.stop_stream()
+        self._audio_stream.close()
+        self.closed = True
+        self._buff.put(None)
+        self._audio_interface.terminate()
+
+    def _fill_buffer(self, in_data, frame_count, time_info, status_flags):
+        self._buff.put(in_data)
+        return None, pyaudio.paContinue
+        
+    def get_default_speakers(self):
+        default_speakers = self._audio_interface.get_device_info_by_index(self.wasapi_info["defaultOutputDevice"])
         if not default_speakers["isLoopbackDevice"]:
-            for loopback in p.get_loopback_device_info_generator():
+            for loopback in self._audio_interface.get_loopback_device_info_generator():
                 if default_speakers["name"] in loopback["name"]:
                     default_speakers = loopback
                     break
             else:
-                spinner.print("No loopback device found. Exiting...")
-                spinner.stop()
+                print("No loopback device found. Exiting...")
                 exit()
+                
+        return default_speakers
+        
+    def get_audio_stream(self, default_speakers):
+        return self._audio_interface.open(
+            format=pyaudio.paInt16,
+            channels=default_speakers["maxInputChannels"],
+            rate=int(default_speakers["defaultSampleRate"]),
+            frames_per_buffer=CHUNK_SIZE,
+            input=True,
+            input_device_index=default_speakers["index"],
+            stream_callback=self._fill_buffer,
+        )
 
-        # Prepare a wave file for recording
-        wave_file = wave.open(filename, 'wb')
-        wave_file.setnchannels(default_speakers["maxInputChannels"])
-        wave_file.setsampwidth(pyaudio.get_sample_size(pyaudio.paInt16))
-        wave_file.setframerate(int(default_speakers["defaultSampleRate"]))
+    def generator(self):
+        while not self.closed:
+            chunk = self._buff.get()
+            if chunk is None:
+                return
+            yield chunk
 
-        # Callback function to write audio data to the wave file
-        def callback(in_data, frame_count, time_info, status):
-            wave_file.writeframes(in_data)
-            return (in_data, pyaudio.paContinue)
+class MicrophoneStream:
+    """Opens a recording stream as a generator yielding the audio chunks."""
+    def __init__(self, rate, chunk):
+        self._rate = rate
+        self._chunk = chunk
+        self._buff = queue.Queue()
+        self.closed = True
 
-        # Open a PyAudio stream for recording
-        with p.open(format=pyaudio.paInt16,
-                    channels=default_speakers["maxInputChannels"],
-                    rate=int(default_speakers["defaultSampleRate"]),
-                    frames_per_buffer=CHUNK_SIZE,
-                    input=True,
-                    input_device_index=default_speakers["index"],
-                    stream_callback=callback) as stream:
-            time.sleep(DURATION)  # Record for the specified duration
+    def __enter__(self):
+        self._audio_interface = pyaudio.PyAudio()
+        self._audio_stream = self._audio_interface.open(
+            format=pyaudio.paInt16,
+            channels=1,
+            rate=self._rate,
+            input=True,
+            frames_per_buffer=self._chunk,
+            stream_callback=self._fill_buffer,
+            input_device_index=0,
+        )
+        self.closed = False
+        return self
 
-        wave_file.close()   # Close the wave file after recording
+    def __exit__(self, type, value, traceback):
+        self._audio_stream.stop_stream()
+        self._audio_stream.close()
+        self.closed = True
+        self._buff.put(None)
+        self._audio_interface.terminate()
 
-        return filename
+    def _fill_buffer(self, in_data, frame_count, time_info, status_flags):
+        self._buff.put(in_data)
+        return None, pyaudio.paContinue
 
-# Main execution block: record audio files
-filenames = []
-for _ in range(3):  # Record audio 3 times
-    filename = record_audio()
-    filenames.append(filename)
+    def generator(self):
+        while not self.closed:
+            chunk = self._buff.get()
+            if chunk is None:
+                return
+            yield chunk
 
-# Transcribe recorded audio files using the transcribe function
-for filename in filenames:
-    transcribe_file(filename)
+def speech_recognition():
+    def listen_print_loop(responses):
+        num_chars_printed = 0
+        for response in responses:
+            if not response.results:
+                continue
 
-# Delete all recorded audio files after transcription
-for filename in filenames:
-    os.remove(filename)
+            result = response.results[0]
+            if not result.alternatives:
+                continue
+
+            transcript = result.alternatives[0].transcript
+
+            if result.is_final:
+                print(transcript.lstrip())
+                num_chars_printed = 0
+
+                if re.search(r"\b(exit|quit)\b", transcript, re.I):
+                    print("Exiting..")
+                    break
+            else:
+                overwrite_chars = ' ' * (num_chars_printed - len(transcript))
+                print(transcript.lstrip() + overwrite_chars)
+                num_chars_printed = len(transcript)
+
+    # Speech recognition setup
+    client = speech.SpeechClient()
+    config = speech.RecognitionConfig(
+        encoding='LINEAR16',                  # Audio encoding type
+        language_code='en-US',                # Language of the audio
+        sample_rate_hertz=RATE,              # Sample rate in Hertz
+        audio_channel_count=2,                # Number of audio channels
+        enable_automatic_punctuation=True,    # Automatic punctuation
+        model='latest_long'                   # Latest long
+    )
+    streaming_config = speech.StreamingRecognitionConfig(config=config, interim_results=True)
+    
+    # Uncomment this line if you prefer to use a microphone rather
+    # than system audio
+    # with MicrophoneStream(RATE, CHUNK_SIZE) as stream:
+    with ComputerAudioStream(RATE, CHUNK_SIZE) as stream:
+        audio_generator = stream.generator()
+        requests = (speech.StreamingRecognizeRequest(audio_content=content) for content in audio_generator)
+        responses = client.streaming_recognize(streaming_config, requests)
+        listen_print_loop(responses)
+        
+
+def main():
+    speech_recognition()
+
+if __name__ == "__main__":
+    main()

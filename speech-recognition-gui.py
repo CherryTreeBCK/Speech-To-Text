@@ -69,7 +69,6 @@ class ComputerAudioStream:
             input_device_index=default_speakers["index"],
             stream_callback=self._fill_buffer,
         )
-        
 
     def generator(self):
         while not self.closed:
