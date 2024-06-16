@@ -1,8 +1,8 @@
-# Speech Recognition
 import queue
 import re
 from threading import Thread
-from google.cloud import speech
+import torch
+from transformers import pipeline
 import pyaudiowpatch as pyaudio
 from gui import GUI
 
@@ -118,51 +118,28 @@ class MicrophoneStream:
             yield chunk
 
 def speech_recognition_thread(gui_queue):
-    def listen_print_loop(responses):
-        num_chars_printed = 0
-        for response in responses:
-            if not response.results:
-                continue
-
-            result = response.results[0]
-            if not result.alternatives:
-                continue
-
-            transcript = result.alternatives[0].transcript
-
-            if result.is_final:
-                gui_queue.put(transcript.lstrip())
-                num_chars_printed = 0
-
-                if re.search(r"\b(exit|quit)\b", transcript, re.I):
-                    print("Exiting..")
-                    break
-            else:
-                overwrite_chars = ' ' * (num_chars_printed - len(transcript))
-                gui_queue.put(transcript.lstrip() + overwrite_chars)
-                num_chars_printed = len(transcript)
-
-    # Speech recognition setup
-    client = speech.SpeechClient()
-    config = speech.RecognitionConfig(
-        encoding='LINEAR16',                  # Audio encoding type
-        language_code='en-US',                # Language of the audio
-        sample_rate_hertz=RATE,              # Sample rate in Hertz
-        audio_channel_count=2,                # Number of audio channels
-        enable_automatic_punctuation=True,    # Automatic punctuation
-        model='latest_long'                   # Latest long
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    pipe = pipeline(
+        "automatic-speech-recognition",
+        model="openai/whisper-tiny",
+        chunk_length_s=30,
+        device=device,
     )
-    streaming_config = speech.StreamingRecognitionConfig(config=config, interim_results=True)
-    
-    # Uncomment this line if you prefer to use a microphone rather
-    # than system audio
+
+    def listen_print_loop(audio_generator):
+        for chunk in audio_generator:
+            prediction = pipe(chunk, return_timestamps=True)["chunks"]
+            transcript = " ".join([pred["text"] for pred in prediction])
+            gui_queue.put(transcript)
+            if re.search(r"\b(exit|quit)\b", transcript, re.I):
+                print("Exiting..")
+                break
+
+    # Uncomment this line if you prefer to use a microphone rather than system audio
     # with MicrophoneStream(RATE, CHUNK_SIZE) as stream:
     with ComputerAudioStream(RATE, CHUNK_SIZE) as stream:
         audio_generator = stream.generator()
-        requests = (speech.StreamingRecognizeRequest(audio_content=content) for content in audio_generator)
-        responses = client.streaming_recognize(streaming_config, requests)
-        listen_print_loop(responses)
-        
+        listen_print_loop(audio_generator)
 
 def main():
     gui = GUI()
