@@ -161,7 +161,7 @@ def speech_recognition_thread(gui_queue):
             audio_data += content
 
             # Write audio data to a temporary file every few seconds
-            if len(audio_data) >= RATE * 2 * 5:  # 10 seconds of audio
+            if len(audio_data) >= RATE * 2 * 5:  # 5 seconds of audio
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio_file:
                     with wave.open(temp_audio_file, 'wb') as wf:
                         wf.setnchannels(2)  # Set to 2 if using stereo input
