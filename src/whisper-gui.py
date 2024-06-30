@@ -1,10 +1,22 @@
-# Speech Recognition
 import queue
 import re
+import tempfile
+import wave
+import numpy as np
 from threading import Thread
-from google.cloud import speech
 import pyaudiowpatch as pyaudio
 from gui import GUI
+from faster_whisper import WhisperModel
+import os
+
+# Setting the environment variable
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+# Model size
+model_size = 'small'
+
+# Initialize the model
+model = WhisperModel(model_size, device="cpu", compute_type="int8")
 
 # Audio recording parameters
 CHUNK_SIZE = 512
@@ -23,7 +35,6 @@ class ComputerAudioStream:
         try:
             # Attempt to get default WASAPI host API information
             self.wasapi_info = self._audio_interface.get_host_api_info_by_type(pyaudio.paWASAPI)
-            
         except OSError:
             print("WASAPI not available. Exiting...")
             exit()
@@ -131,7 +142,7 @@ def speech_recognition_thread(gui_queue):
             transcript = result.alternatives[0].transcript
 
             if result.is_final:
-                gui_queue.put(transcript.lstrip())
+                gui_queue.put(transcript.strip())
                 num_chars_printed = 0
 
                 if re.search(r"\b(exit|quit)\b", transcript, re.I):
@@ -139,30 +150,32 @@ def speech_recognition_thread(gui_queue):
                     break
             else:
                 overwrite_chars = ' ' * (num_chars_printed - len(transcript))
-                gui_queue.put(transcript.lstrip() + overwrite_chars)
+                gui_queue.put(transcript.strip() + overwrite_chars)
                 num_chars_printed = len(transcript)
 
-    # Speech recognition setup
-    client = speech.SpeechClient()
-    config = speech.RecognitionConfig(
-        encoding='LINEAR16',                  # Audio encoding type
-        language_code='en-US',                # Language of the audio
-        sample_rate_hertz=RATE,              # Sample rate in Hertz
-        audio_channel_count=2,                # Number of audio channels
-        enable_automatic_punctuation=True,    # Automatic punctuation
-        model='latest_long'                   # Latest long
-    )
-    streaming_config = speech.StreamingRecognitionConfig(config=config, interim_results=True)
-    
-    # Uncomment this line if you prefer to use a microphone rather
-    # than system audio
-    # with MicrophoneStrzeam(RATE, CHUNK_SIZE) as stream:
     with ComputerAudioStream(RATE, CHUNK_SIZE) as stream:
         audio_generator = stream.generator()
-        requests = (speech.StreamingRecognizeRequest(audio_content=content) for content in audio_generator)
-        responses = client.streaming_recognize(streaming_config, requests)
-        listen_print_loop(responses)
+        audio_data = b''
         
+        for content in audio_generator:
+            audio_data += content
+
+            # Write audio data to a temporary file every few seconds
+            if len(audio_data) >= RATE * 2 * 5:  # 10 seconds of audio
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio_file:
+                    with wave.open(temp_audio_file, 'wb') as wf:
+                        wf.setnchannels(2)  # Set to 2 if using stereo input
+                        wf.setsampwidth(2)  # 16-bit samples, which is 2 bytes
+                        wf.setframerate(RATE)
+                        wf.writeframes(audio_data)
+                    temp_audio_file.flush()
+                    
+                segments, info = model.transcribe(temp_audio_file.name, beam_size=5)
+                for segment in segments:
+                    print(segment.text)
+                    gui_queue.put(segment.text)
+                
+                audio_data = b''  # Reset audio data buffer
 
 def main():
     gui = GUI()

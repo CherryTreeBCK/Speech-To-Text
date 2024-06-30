@@ -7,7 +7,7 @@ from faster_whisper import WhisperModel
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 # Model size
-model_size = 'tiny'
+model_size = 'small'
 
 # Initialize the model
 model = WhisperModel(model_size, device="cpu", compute_type="int8")
@@ -29,7 +29,7 @@ def print_system_utilization():
     print(f"Memory Usage of the program: {memory_usage_mb:.2f} MB")
 
 # Start transcribing and monitor system utilization
-segments, info = model.transcribe("Jett Voicemail 707  Animated.mp3", beam_size=5)
+segments, info = model.transcribe("Rev.mp3", beam_size=5)
 
 print("Detected language '%s' with probability %f" % (info.language, info.language_probability))
 
