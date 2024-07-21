@@ -19,7 +19,7 @@ using Whisper is to have real-time, local transcription without any setup!
 - Change whisper-gui.py to use a numpy buffer instead of a temp file
     - Use circular buffer, overwrite the buffer such that it always has the last 5 seconds of audio.
     - Currently, whisper-gui has a delay due to the 5 second temp file buffer. Real time is the goal.
-- Specific Tasks:
-    1. Continuously record a x second(s) long clip
-    2. Numpy instead of temp file
+    - Using hugging face 
+- Circular buffer initializer should use chunk factor instead of chunk size because we do not know the rate.
+
 

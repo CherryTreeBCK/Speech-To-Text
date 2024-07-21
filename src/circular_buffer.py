@@ -5,11 +5,10 @@ import wave
 
 class ComputerAudioStream:
     """Opens a recording stream and keeps the last few seconds of audio data."""
-    def __init__(self, rate, chunk, duration):
-        self._rate = rate
+    def __init__(self, chunk, duration):
         self._chunk = chunk
-        self._deque_len = duration * rate
-        self._buff = collections.deque(maxlen=self._deque_len)
+        self._duration = duration
+        self._buff = collections.deque()  # Buffer initialized empty
         self.closed = True
 
     def __enter__(self):
@@ -21,6 +20,9 @@ class ComputerAudioStream:
             exit()
         
         default_speakers = self.get_default_speakers()
+        self._rate = int(default_speakers["defaultSampleRate"])
+        self._channels = default_speakers["maxInputChannels"]
+        self._buff = collections.deque(maxlen=int(self._duration * self._rate * self._channels))
         self._audio_stream = self.get_audio_stream(default_speakers)
         self.closed = False
         return self
@@ -52,8 +54,8 @@ class ComputerAudioStream:
     def get_audio_stream(self, default_speakers):
         return self._audio_interface.open(
             format=pyaudio.paInt16,
-            channels=default_speakers["maxInputChannels"],
-            rate=int(default_speakers["defaultSampleRate"]),
+            channels=self._channels,
+            rate=self._rate,
             frames_per_buffer=self._chunk,
             input=True,
             input_device_index=default_speakers["index"],
@@ -65,7 +67,7 @@ class ComputerAudioStream:
         if duration is None:
             return np.array(self._buff)
         
-        num_samples = int(duration * self._rate)
+        num_samples = int(duration * self._rate * self._channels)
         if num_samples > len(self._buff):
             num_samples = len(self._buff)
         
@@ -73,16 +75,14 @@ class ComputerAudioStream:
 
 # Example usage:
 if __name__ == "__main__":
-    RATE = 44100
     CHUNK_FACTOR = 5
-    CHUNK = int(RATE / CHUNK_FACTOR)
     DURATION = 5
     OUTPUT_FILENAME = "output.wav"
 
-    with ComputerAudioStream(RATE, CHUNK, DURATION) as stream:
+    with ComputerAudioStream(chunk=int(44100 / CHUNK_FACTOR), duration=DURATION) as stream:
         import time
-        for _ in range(int(RATE / CHUNK * DURATION)):
-            time.sleep(CHUNK / RATE)
+        for _ in range(int(stream._rate / stream._chunk * DURATION)):
+            time.sleep(stream._chunk / stream._rate)
             audio_chunk = stream.get_current_buffer()
             print(f"Full buffer: {audio_chunk}")
             short_chunk = stream.get_current_buffer(2)  # Last 2 seconds
@@ -91,9 +91,9 @@ if __name__ == "__main__":
         # Save the last DURATION seconds of audio to a WAV file
         final_audio = stream.get_current_buffer()
         wf = wave.open(OUTPUT_FILENAME, 'wb')
-        wf.setnchannels(1)  # Assuming mono audio for simplicity
+        wf.setnchannels(stream._channels)
         wf.setsampwidth(pyaudio.PyAudio().get_sample_size(pyaudio.paInt16))
-        wf.setframerate(RATE)
+        wf.setframerate(stream._rate)
         wf.writeframes(final_audio.tobytes())
         wf.close()
 
