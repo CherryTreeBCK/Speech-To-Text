@@ -85,8 +85,8 @@ if __name__ == "__main__":
             time.sleep(stream._chunk / stream._rate)
             audio_chunk = stream.get_current_buffer()
             print(f"Full buffer: {audio_chunk}")
-            short_chunk = stream.get_current_buffer(2)  # Last 2 seconds
-            print(f"Last 2 seconds: {short_chunk}")
+            short_chunk = stream.get_current_buffer(5)  # Last 5 seconds
+            print(f"Last 5 seconds: {short_chunk}")
 
         # Save the last DURATION seconds of audio to a WAV file
         final_audio = stream.get_current_buffer()
