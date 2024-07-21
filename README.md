@@ -16,7 +16,12 @@ using Whisper is to have real-time, local transcription without any setup!
 
 
 # To-Do:
-- Change whisper-gui.py to use a numpy buffer instead of a temp file
+- Circular buffer works for stereo audio when saving to a file, but does not work
+when using whisper circular. This is likely due to the fact that stereo audio is 
+treated as a single channel in circular buffer, causing the program to think it
+is twice as long as it actually is (since it's the same audio right after itself).
+    - Double check sampling rates, make more modular.
+- Change whisper-gui.py to use a numpy buffer
     - Use circular buffer, overwrite the buffer such that it always has the last 5 seconds of audio.
     - Currently, whisper-gui has a delay due to the 5 second temp file buffer. Real time is the goal.
     - Using hugging face 
