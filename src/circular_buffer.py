@@ -1,13 +1,13 @@
 import pyaudiowpatch as pyaudio
 import numpy as np
 import collections
-from scipy.signal import resample
+import librosa
 from pydub import AudioSegment
 
 class ComputerAudioStream:
     """Opens a recording stream and keeps the last few seconds of audio data."""
-    def __init__(self, chunk, duration):
-        self._chunk = chunk
+    def __init__(self, chunk_factor, duration):
+        self._chunk_factor = chunk_factor
         self._duration = duration
         self._buff = collections.deque()  # Buffer initialized empty
         self.closed = True
@@ -23,6 +23,7 @@ class ComputerAudioStream:
         default_speakers = self.get_default_speakers()
         self._rate = int(default_speakers["defaultSampleRate"])
         self._channels = default_speakers["maxInputChannels"]
+        self._chunk = int(self._rate / self._chunk_factor)
         self._buff = collections.deque(maxlen=int(self._duration * self._rate * self._channels))
         self._audio_stream = self.get_audio_stream(default_speakers)
         self.closed = False
@@ -74,62 +75,56 @@ class ComputerAudioStream:
         
         return np.array(self._buff)[-num_samples:]
         
-    def get_current_buffer_resample(self, duration=None, target_sample_rate=16000):
-        sample_rate = self._rate
+    def get_current_buffer_resample(self, duration=None, target_sr=16000):
         data = self.get_current_buffer(duration=duration)
-
-        # Reshape data to two channels if stereo
+        # Use librosa to resample the audio
         if self._channels > 1:
-            data = data.reshape(-1, self._channels)
-            data = data.mean(axis=1)  # Convert to mono by averaging channels
-            
-        data = data.flatten()
+            data = data.reshape(-1, self._channels).mean(axis=1)
+        data_float32 = data.astype(np.float32) / 32768.0  # Convert to float32
 
-        # Convert to float32
-        if data.dtype == np.int16:
-            data = data.astype(np.float32) / 32768.0  # int16 range is -32768 to 32767
-        elif data.dtype == np.int32:
-            data = data.astype(np.float32) / 2147483648.0  # int32 range is -2147483648 to 2147483647
-        else:
-            data = data.astype(np.float32)
+        resampled_data = librosa.resample(data_float32, orig_sr=self._rate, target_sr=target_sr)
 
-        # Resample the data to the target sample rate
-        if sample_rate != target_sample_rate:
-            number_of_samples = round(len(data) * float(target_sample_rate) / sample_rate)
-            data = resample(data, number_of_samples)
-            sample_rate = target_sample_rate
-
-        return data
+        return resampled_data
 
 # Example usage:
 if __name__ == "__main__":
-    CHUNK_FACTOR = 5 # How many chunks a second
-    DURATION = 5 # Seconds
-    OUTPUT_FILENAME = "output.mp3"
+    CHUNK_FACTOR = 5  # How many chunks a second
+    DURATION = 5  # Seconds
 
-    with ComputerAudioStream(chunk=int(48000 / CHUNK_FACTOR), duration=DURATION) as stream:
+    with ComputerAudioStream(chunk_factor=CHUNK_FACTOR, duration=DURATION) as stream:
         import time
-        for _ in range(int(stream._rate / stream._chunk * DURATION)):
-            time.sleep(stream._chunk / stream._rate)
-            audio_chunk = stream.get_current_buffer_resample()
-            print(f"Full buffer: {audio_chunk}")
-            short_chunk = stream.get_current_buffer(5)  # Last 5 seconds
-            print(f"Last 5 seconds: {short_chunk}")
+        print("Recording audio...")
+        time.sleep(DURATION)
+        print("Recording stopped.")
 
         # Save the last DURATION seconds of audio to an MP3 file
-        final_audio = stream.get_current_buffer(5)
-        
-        print(final_audio.shape)
-        
+        data = stream.get_current_buffer()
+
+        print(data.shape)
+
         # Convert the numpy array to an AudioSegment
-        audio_segment = AudioSegment(
-            final_audio.tobytes(),
+        audio_segment_og = AudioSegment(
+            data.tobytes(),
             frame_rate=stream._rate,
-            sample_width=final_audio.dtype.itemsize,
+            sample_width=data.dtype.itemsize,
             channels=stream._channels
         )
+        
+        print("Using librosa to resample the audio...")
+        
+        # Use librosa to resample the audio
+        resampled_data = stream.get_current_buffer_resample(target_sr=16000)
+        resampled_data_int16 = (resampled_data * 32768).astype(np.int16)  # Convert back to int16
+
+        # Convert the resampled numpy array to an AudioSegment
+        audio_segment_resample = AudioSegment(
+            resampled_data_int16.tobytes(),
+            frame_rate=16000,
+            sample_width=resampled_data_int16.dtype.itemsize,
+            channels=1
+        )
+        print("Audio resampled successfully.")
 
         # Export the audio segment as an MP3 file
-        audio_segment.export(OUTPUT_FILENAME, format="mp3")
-
-        print(f"Audio saved to {OUTPUT_FILENAME}")
+        audio_segment_og.export("output_original.mp3", format="mp3")
+        audio_segment_resample.export("output_resample.mp3", format="mp3")

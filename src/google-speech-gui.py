@@ -156,7 +156,7 @@ def speech_recognition_thread(gui_queue):
     
     # Uncomment this line if you prefer to use a microphone rather
     # than system audio
-    # with MicrophoneStrzeam(RATE, CHUNK_SIZE) as stream:
+    # with MicrophoneStream(RATE, CHUNK_SIZE) as stream:
     with ComputerAudioStream(RATE, CHUNK_SIZE) as stream:
         audio_generator = stream.generator()
         requests = (speech.StreamingRecognizeRequest(audio_content=content) for content in audio_generator)

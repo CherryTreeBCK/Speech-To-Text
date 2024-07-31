@@ -1,7 +1,5 @@
 from circular_buffer import ComputerAudioStream
 from faster_whisper import WhisperModel
-from scipy.signal import resample
-import numpy as np
 import time
 import os
 
@@ -18,18 +16,18 @@ model_size = 'small'
 # Initialize the model
 model = WhisperModel(model_size, device="cpu", compute_type="int8")
 
-
 ##########################################################
 # Circular buffer logic
 ##########################################################
 CHUNK_FACTOR = 5 # How many chunks a second
 DURATION = 5 # Seconds
-with ComputerAudioStream(chunk=int(48000 / CHUNK_FACTOR), duration=DURATION) as stream:
+
+with ComputerAudioStream(chunk_factor=CHUNK_FACTOR, duration=DURATION) as stream:
     print("Recording audio...")
     time.sleep(DURATION)
     print("Finished recording.")
     
-    data = stream.get_current_buffer_resample()
+    data = stream.get_current_buffer_resample(target_sr=16000)
     print(f"data shape: {data.shape}")
     
     # Start transcribing and monitor system utilization
