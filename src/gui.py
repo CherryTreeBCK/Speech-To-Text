@@ -4,10 +4,10 @@ from tkinter.ttk import Combobox
 import queue
 
 class GUI:
-    def __init__(self):
+    def __init__(self, width=500, height=100):
         self.root = tk.Tk()
         self.root.title("Text Overlay")
-        self.root.geometry("400x100+100+100")
+        self.root.geometry(f"{width}x{height}+100+100")
         self.root.attributes("-topmost", True)
         self.root.overrideredirect(True)
         self.root.attributes('-alpha', 0.7)
@@ -20,9 +20,9 @@ class GUI:
         self.root.wm_attributes('-transparentcolor', self.root['bg'])
 
         # Canvas for rounded edges
-        self.canvas = tk.Canvas(self.root, width=400, height=100, bg=self.root['bg'], highlightthickness=0)
+        self.canvas = tk.Canvas(self.root, width=width, height=height, bg=self.root['bg'], highlightthickness=0)
         self.canvas.pack(expand=True, fill="both")
-        self.rounded_rect = self.create_rounded_rectangle(0, 0, 400, 100, 20, fill="white", outline="")
+        self.rounded_rect = self.create_rounded_rectangle(0, 0, width, height, 20, fill="white", outline="")
 
         # Text label
         self.text_label = tk.Label(self.root, text="Your text will appear here",

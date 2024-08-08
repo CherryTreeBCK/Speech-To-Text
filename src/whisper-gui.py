@@ -10,14 +10,14 @@ from circular_buffer import ComputerAudioStream  # Import the circular buffer cl
 # Setting the environment variable
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 # Model size
-model_size = 'small'
+model_size = 'tiny'
 # Initialize the model
 model = WhisperModel(model_size, device="cpu", compute_type="int8")
 LANG_THRESHOLD = 0.9 # Helps ensure the confidence is high
 
 def speech_recognition_thread(gui_queue):
-    CHUNK_FACTOR = 20  # How many chunks a second
-    DURATION =  5 # Seconds
+    CHUNK_FACTOR = 10 # How many chunks a second
+    DURATION = 5 # Seconds
 
     with ComputerAudioStream(chunk_factor=CHUNK_FACTOR, duration=DURATION) as stream:
         while True:
