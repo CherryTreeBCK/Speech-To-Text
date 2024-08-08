@@ -19,24 +19,23 @@ model = WhisperModel(model_size, device="cpu", compute_type="int8")
 ##########################################################
 # Circular buffer logic
 ##########################################################
-CHUNK_FACTOR = 5 # How many chunks a second
+CHUNK_FACTOR = 10 # How many chunks a second
 DURATION = 5 # Seconds
 
 with ComputerAudioStream(chunk_factor=CHUNK_FACTOR, duration=DURATION) as stream:
-    print("Recording audio...")
-    time.sleep(DURATION)
-    print("Finished recording.")
-    
-    data = stream.get_current_buffer_resample(target_sr=16000)
-    print(f"data shape: {data.shape}")
-    
-    # Start transcribing and monitor system utilization
-    segments, info = model.transcribe(data, beam_size=5)
+    while True:
+        data = stream.get_current_buffer_resample(target_sr=16000)
+        print(f"data shape: {data.shape}")
+        
+        # Start transcribing and monitor system utilization
+        segments, info = model.transcribe(data, beam_size=5)
 
-    # Language confidence
-    print("Detected language '%s' with probability %f" % (info.language, info.language_probability))
+        # Language confidence
+        if info.language_probability > 0.9:
+            print("Detected language '%s' with probability %f" % (info.language, info.language_probability))
 
-    # Print the transcription
-    for segment in segments:
-        print("[%.2fs -> %.2fs] %s" % (segment.start, segment.end, segment.text))
+            # Print the transcription
+            
+            for segment in segments:
+                print("[%.2fs -> %.2fs] %s" % (segment.start, segment.end, segment.text))
         

@@ -21,6 +21,7 @@ model = WhisperModel(model_size, device="cpu", compute_type="int8")
 # Audio recording parameters
 CHUNK_SIZE = 512
 RATE = 48000
+LANG_THRESHOLD = 0.9
 
 class ComputerAudioStream:
     """Opens a recording stream as a generator yielding the audio chunks."""
@@ -129,30 +130,6 @@ class MicrophoneStream:
             yield chunk
 
 def speech_recognition_thread(gui_queue):
-    def listen_print_loop(responses):
-        num_chars_printed = 0
-        for response in responses:
-            if not response.results:
-                continue
-
-            result = response.results[0]
-            if not result.alternatives:
-                continue
-
-            transcript = result.alternatives[0].transcript
-
-            if result.is_final:
-                gui_queue.put(transcript.strip())
-                num_chars_printed = 0
-
-                if re.search(r"\b(exit|quit)\b", transcript, re.I):
-                    print("Exiting..")
-                    break
-            else:
-                overwrite_chars = ' ' * (num_chars_printed - len(transcript))
-                gui_queue.put(transcript.strip() + overwrite_chars)
-                num_chars_printed = len(transcript)
-
     with ComputerAudioStream(RATE, CHUNK_SIZE) as stream:
         audio_generator = stream.generator()
         audio_data = b''
@@ -169,11 +146,13 @@ def speech_recognition_thread(gui_queue):
                         wf.setframerate(RATE)
                         wf.writeframes(audio_data)
                     temp_audio_file.flush()
-                    
+                
                 segments, info = model.transcribe(temp_audio_file.name, beam_size=5)
-                for segment in segments:
-                    print(segment.text)
-                    gui_queue.put(segment.text)
+                
+                if info.language_probability > LANG_THRESHOLD:
+                    for segment in segments:
+                        print(segment.text)
+                        gui_queue.put(segment.text)
                 
                 audio_data = b''  # Reset audio data buffer
 
