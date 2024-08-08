@@ -15,19 +15,15 @@ model_size = 'small'
 model = WhisperModel(model_size, device="cpu", compute_type="int8")
 LANG_THRESHOLD = 0.9 # Helps ensure the confidence is high
 
-# Audio recording parameters
-CHUNK_SIZE = 512
-RATE = 48000
-
 def speech_recognition_thread(gui_queue):
-    CHUNK_FACTOR = 10  # How many chunks a second
-    DURATION = 5  # Seconds
+    CHUNK_FACTOR = 20  # How many chunks a second
+    DURATION =  5 # Seconds
 
     with ComputerAudioStream(chunk_factor=CHUNK_FACTOR, duration=DURATION) as stream:
         while True:
             # Get the current buffer, resampled to 16kHz
             data = stream.get_current_buffer_resample(target_sr=16000)
-            print(f"data shape: {data.shape}")
+            # print(f"data shape: {data.shape}")
 
             # Transcribe the audio data using the Whisper model
             segments, info = model.transcribe(data, beam_size=5)
