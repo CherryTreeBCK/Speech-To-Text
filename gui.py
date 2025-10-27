@@ -1,8 +1,90 @@
 import tkinter as tk
-from tkinter import colorchooser, simpledialog, font
+from tkinter import colorchooser, simpledialog, font, messagebox
 from tkinter.ttk import Combobox
 import queue
 import config
+import json
+import os
+import threading
+from pynput import keyboard
+
+HOTKEYS_FILE = "hotkeys.json"
+
+# Helper utilities for hotkey parsing & normalization
+def normalize_key_name(k: str):
+    k = k.strip().lower()
+    aliases = {
+        "control": "ctrl",
+        "command": "cmd",
+        "option": "alt",
+        "windows": "win",
+        "super": "win",
+        "escape": "esc",
+        "return": "enter",
+        "spacebar": "space",
+    }
+    if k in aliases:
+        return aliases[k]
+    return k
+
+def parse_hotkey_string(s: str):
+    """
+    Converts a hotkey string like "ctrl+alt+o" or "f9" into a normalized set of tokens:
+    e.g. {"ctrl","alt","o"}.
+    Returns a set of strings, or raises ValueError if invalid.
+    """
+    if not s or not isinstance(s, str):
+        raise ValueError("Hotkey must be a non-empty string.")
+    parts = [normalize_key_name(p) for p in s.strip().lower().split("+")]
+    parts = [p for p in parts if p]  # remove empties
+    if not parts:
+        raise ValueError("No valid keys provided.")
+    # Basic validation: allow single letter/number, function keys f1..f24, known special keys
+    valid_specials = {
+        "ctrl", "alt", "shift", "cmd", "win",
+        "enter", "esc", "tab", "space", "backspace",
+        "up", "down", "left", "right",
+    }
+    for p in parts:
+        if len(p) == 1 and p.isprintable():
+            continue
+        if p.startswith("f") and p[1:].isdigit():
+            continue
+        if p in valid_specials:
+            continue
+        # allow numeric keys "1","2",...
+        if p.isdigit():
+            continue
+        raise ValueError(f"Unrecognized key: '{p}'")
+    return frozenset(parts)
+
+def key_to_token(key):
+    """
+    Convert a pynput key object to our normalized token string.
+    """
+    if isinstance(key, keyboard.KeyCode):
+        ch = key.char
+        return ch.lower() if ch else None
+    if isinstance(key, keyboard.Key):
+        mapping = {
+            keyboard.Key.ctrl_l: "ctrl", keyboard.Key.ctrl_r: "ctrl",
+            keyboard.Key.alt_l: "alt", keyboard.Key.alt_r: "alt",
+            keyboard.Key.shift_l: "shift", keyboard.Key.shift_r: "shift",
+            keyboard.Key.cmd: "cmd", keyboard.Key.cmd_r: "cmd",
+            keyboard.Key.enter: "enter", keyboard.Key.esc: "esc",
+            keyboard.Key.tab: "tab", keyboard.Key.space: "space",
+            keyboard.Key.backspace: "backspace",
+            keyboard.Key.up: "up", keyboard.Key.down: "down",
+            keyboard.Key.left: "left", keyboard.Key.right: "right",
+        }
+        if key in mapping:
+            return mapping[key]
+        # handle function keys by name (e.g., Key.f1)
+        name = str(key).lower()
+        if "f" in name:
+            # e.g. "Key.f9" -> "f9"
+            return name.split(".")[-1]
+    return None
 
 class GUI:
     def __init__(self, width=900, height=50):
@@ -50,6 +132,12 @@ class GUI:
         self.settings_menu.add_command(label="Change Font Color", command=self.change_font_color)
         self.settings_menu.add_command(label="Toggle Translate", command=self.toggle_translate)
         self.settings_menu.add_command(label="Set Translation Language", command=self.change_translation_language)
+        # Hotkey items
+        self.settings_menu.add_separator()
+        self.settings_menu.add_command(label="Set Show Hotkey", command=self.set_show_hotkey)
+        self.settings_menu.add_command(label="Set Hide Hotkey", command=self.set_hide_hotkey)
+        self.settings_menu.add_command(label="Show Current Hotkeys", command=self.show_current_hotkeys)
+        self.settings_menu.add_separator()
         self.settings_menu.add_command(label="Exit", command=self.exit_app)
 
         # Settings menu
@@ -58,8 +146,100 @@ class GUI:
         # Queue for thread communication
         self.queue = queue.Queue()
 
+        # Hotkey state
+        self.hotkeys = self.load_hotkeys()
+        # tokens are frozensets of normalized strings
+        try:
+            self.show_tokens = parse_hotkey_string(self.hotkeys.get("show"))
+            self.hide_tokens = parse_hotkey_string(self.hotkeys.get("hide"))
+        except Exception as e:
+            print(f"Hotkey parse error: {e}. Falling back to defaults.")
+            self.show_tokens = parse_hotkey_string(config.SHOW_HOTKEY)
+            self.hide_tokens = parse_hotkey_string(config.HIDE_HOTKEY)
+
+        self.current_pressed = set()
+        self._show_triggered = False
+        self._hide_triggered = False
+
+        # Start global listener in background thread
+        self.listener_thread = threading.Thread(target=self._start_listener, daemon=True)
+        self.listener_thread.start()
+
         # Update GUI periodically from the queue
         self.update_gui()
+
+    def load_hotkeys(self):
+        # Returns dict {"show": "...", "hide": "..."}
+        defaults = {"show": getattr(config, "SHOW_HOTKEY", "ctrl+alt+o"),
+                    "hide": getattr(config, "HIDE_HOTKEY", "ctrl+alt+h")}
+        if os.path.exists(HOTKEYS_FILE):
+            try:
+                with open(HOTKEYS_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                # ensure keys exist
+                return {"show": data.get("show", defaults["show"]),
+                        "hide": data.get("hide", defaults["hide"])}
+            except Exception as e:
+                print(f"Failed to load {HOTKEYS_FILE}: {e}")
+                return defaults
+        else:
+            return defaults
+
+    def save_hotkeys(self):
+        try:
+            with open(HOTKEYS_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.hotkeys, f, indent=2)
+        except Exception as e:
+            print(f"Failed to save hotkeys: {e}")
+
+    def _start_listener(self):
+        # Runs in background thread
+        def on_press(key):
+            token = key_to_token(key)
+            if token:
+                self.current_pressed.add(token)
+            self._check_hotkeys_on_press()
+
+        def on_release(key):
+            token = key_to_token(key)
+            if token and token in self.current_pressed:
+                self.current_pressed.remove(token)
+            # Reset trigger flags when keys released so hotkey triggers again on next press
+            self._show_triggered = False
+            self._hide_triggered = False
+
+        with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
+            listener.join()
+
+    def _check_hotkeys_on_press(self):
+        # Show hotkey
+        if self.show_tokens.issubset(self.current_pressed):
+            if not self._show_triggered:
+                self._on_show_hotkey()
+                self._show_triggered = True
+        # Hide hotkey
+        if self.hide_tokens.issubset(self.current_pressed):
+            if not self._hide_triggered:
+                self._on_hide_hotkey()
+                self._hide_triggered = True
+
+    def _on_show_hotkey(self):
+        try:
+            # Make window visible if hidden
+            self.root.after(0, lambda: self.root.deiconify())
+            # ensure topmost
+            self.root.after(0, lambda: self.root.attributes("-topmost", True))
+            print("Overlay shown (hotkey).")
+        except Exception as e:
+            print(f"Failed to show overlay: {e}")
+
+    def _on_hide_hotkey(self):
+        try:
+            # Hide the window
+            self.root.after(0, lambda: self.root.withdraw())
+            print("Overlay hidden (hotkey).")
+        except Exception as e:
+            print(f"Failed to hide overlay: {e}")
 
     def create_rounded_rectangle(self, x1, y1, x2, y2, radius=25, **kwargs):
         points = [x1 + radius, y1,
@@ -85,6 +265,7 @@ class GUI:
         return self.canvas.create_polygon(points, **kwargs, smooth=True)
 
     def open_settings(self, event):
+        # Update menu labels if you want dynamic labels here (optional)
         self.settings_menu.tk_popup(event.x_root, event.y_root)
 
     def toggle_dragging(self):
@@ -95,7 +276,10 @@ class GUI:
         if color:
             self.canvas.itemconfig(self.rounded_rect, fill=color)
             self.text_label.config(bg=color)
-            self.settings_icon.config(bg=color)
+            try:
+                self.settings_icon.config(bg=color)
+            except Exception:
+                pass
 
     def change_translucency(self):
         alpha = simpledialog.askfloat("Translucency", "Enter value (0.1 - 1.0):", minvalue=0.1, maxvalue=1.0)
@@ -116,7 +300,10 @@ class GUI:
             if selected_font:
                 self.default_font = (selected_font, self.default_font[1])
                 self.text_label.configure(font=self.default_font, fg=self.default_font_color)
-                self.settings_icon.configure(font=self.default_font, fg=self.default_font_color)
+                try:
+                    self.settings_icon.configure(font=self.default_font, fg=self.default_font_color)
+                except Exception:
+                    pass
                 font_window.destroy()
 
         font_combobox.bind("<<ComboboxSelected>>", font_selected)
@@ -127,14 +314,20 @@ class GUI:
         if font_size:
             self.default_font = (self.default_font[0], font_size)
             self.text_label.configure(font=self.default_font, fg=self.default_font_color)
-            self.settings_icon.configure(font=self.default_font, fg=self.default_font_color)
+            try:
+                self.settings_icon.configure(font=self.default_font, fg=self.default_font_color)
+            except Exception:
+                pass
 
     def change_font_color(self):
         color = colorchooser.askcolor(title="Choose font color")[1]
         if color:
             self.default_font_color = color
             self.text_label.configure(font=self.default_font, fg=self.default_font_color)
-            self.settings_icon.configure(font=self.default_font, fg=self.default_font_color)
+            try:
+                self.settings_icon.configure(font=self.default_font, fg=self.default_font_color)
+            except Exception:
+                pass
 
     def on_drag_start(self, event):
         if self.drag_enabled:
@@ -159,7 +352,11 @@ class GUI:
             print(f"Translation language set to: {config.LANGUAGE}")
 
     def exit_app(self):
-        self.root.destroy()
+        # Stop the app
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
 
     def update_text(self, text):
         self.text_label.config(text=text)
@@ -169,6 +366,38 @@ class GUI:
             text = self.queue.get_nowait()
             self.update_text(text)
         self.root.after(100, self.update_gui)
+
+    # Hotkey configuration helpers
+    def set_show_hotkey(self):
+        s = simpledialog.askstring("Set Show Hotkey", "Enter show hotkey (e.g. ctrl+alt+o or f9):", initialvalue=self.hotkeys.get("show"))
+        if s is None:
+            return
+        try:
+            tokens = parse_hotkey_string(s)
+        except ValueError as e:
+            messagebox.showerror("Invalid hotkey", str(e))
+            return
+        self.hotkeys["show"] = s.strip().lower()
+        self.save_hotkeys()
+        self.show_tokens = tokens
+        messagebox.showinfo("Hotkey saved", f"Show hotkey set to: {self.hotkeys['show']}")
+
+    def set_hide_hotkey(self):
+        s = simpledialog.askstring("Set Hide Hotkey", "Enter hide hotkey (e.g. ctrl+alt+h or f10):", initialvalue=self.hotkeys.get("hide"))
+        if s is None:
+            return
+        try:
+            tokens = parse_hotkey_string(s)
+        except ValueError as e:
+            messagebox.showerror("Invalid hotkey", str(e))
+            return
+        self.hotkeys["hide"] = s.strip().lower()
+        self.save_hotkeys()
+        self.hide_tokens = tokens
+        messagebox.showinfo("Hotkey saved", f"Hide hotkey set to: {self.hotkeys['hide']}")
+
+    def show_current_hotkeys(self):
+        messagebox.showinfo("Current Hotkeys", f"Show: {self.hotkeys.get('show')}\nHide: {self.hotkeys.get('hide')}")
 
     def run(self):
         self.root.mainloop()
